@@ -18,11 +18,13 @@ import org.springframework.web.server.ResponseStatusException;
 import pl.rynek.chat.clients.CatalogClient;
 import pl.rynek.chat.clients.CatalogClient.OfferInfo;
 import pl.rynek.chat.clients.IdentityClient;
+import pl.rynek.chat.clients.MediaClient;
 
 /**
  * Rozmowy kupujących ze sprzedawcami. Rozmowę zakłada kupujący w kontekście oferty (jedna na parę oferta–kupujący).
  * Wątek widzą tylko jego uczestnicy (dla pozostałych nie istnieje). Blokada działa na parę użytkowników i zatrzymuje
- * wysyłanie wiadomości oraz propozycji cen. Załączniki i kanał na żywo (WebSocket) nie są jeszcze dostępne.
+ * wysyłanie wiadomości oraz propozycji cen. Załącznik to plik {@code CHAT_ATTACHMENT} z media-service, który wysyłający sam
+ * wgrał; obie strony rozmowy oglądają go pod krótko ważnym podpisanym adresem. Kanał na żywo (WebSocket) nie jest jeszcze dostępny.
  */
 @Service
 public class ChatService {
@@ -36,17 +38,19 @@ public class ChatService {
     private final BlockRepository blocks;
     private final CatalogClient catalog;
     private final IdentityClient identity;
+    private final MediaClient media;
     private final ChatNotifications notices;
     private final Clock clock;
 
     public ChatService(ChatRepository chats, MessageRepository messages, PriceOfferRepository priceOffers, BlockRepository blocks,
-                       CatalogClient catalog, IdentityClient identity, ChatNotifications notices, Clock clock) {
+                       CatalogClient catalog, IdentityClient identity, MediaClient media, ChatNotifications notices, Clock clock) {
         this.chats = chats;
         this.messages = messages;
         this.priceOffers = priceOffers;
         this.blocks = blocks;
         this.catalog = catalog;
         this.identity = identity;
+        this.media = media;
         this.notices = notices;
         this.clock = clock;
     }
@@ -131,18 +135,39 @@ public class ChatService {
         return ids.isEmpty() ? Map.of() : priceOffers.findAllById(ids).stream().collect(Collectors.toMap(PriceOffer::getId, o -> o));
     }
 
-    @Transactional
-    public Message send(UUID userId, UUID chatId, String text, UUID attachmentMediaId) {
-        if (attachmentMediaId != null) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT, "Załączniki w rozmowach będą dostępne wkrótce.");
+    /** Załącznik zweryfikowany w media-service: typ pliku zapisywany przy wiadomości. */
+    public record Attachment(UUID mediaId, String contentType) {
+    }
+
+    /**
+     * Sprawdza załącznik przed wysłaniem (bez transakcji, bo woła media-service): rozmowa musi być widoczna dla wysyłającego,
+     * a plik musi być jego własnym, gotowym {@code CHAT_ATTACHMENT}. Brak załącznika to {@code null}.
+     */
+    public Attachment attachment(UUID userId, UUID chatId, UUID mediaId) {
+        if (mediaId == null) {
+            return null;
         }
+        visible(userId, chatId);
+        MediaClient.File file = media.file(mediaId).filter(f -> f.ownerId().equals(userId) && "CHAT_ATTACHMENT".equals(f.purpose()))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNPROCESSABLE_CONTENT,
+                        "Nie znaleźliśmy tego załącznika. Wyślij plik jeszcze raz."));
+        return new Attachment(file.id(), file.contentType());
+    }
+
+    /** Adres do obejrzenia załącznika wiadomości (podpisany, krótko ważny); pusty bez załącznika albo gdy pliku nie da się pobrać. */
+    public Optional<String> attachmentUrl(Message message) {
+        return message.getAttachmentMediaId() == null ? Optional.empty() : media.url(message.getAttachmentMediaId());
+    }
+
+    @Transactional
+    public Message send(UUID userId, UUID chatId, String text, Attachment attachment) {
         Chat chat = openChat(userId, chatId);
         String clean = text == null ? "" : text.trim();
         if (clean.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Napisz wiadomość.");
         }
         Instant recipientReadAt = chat.readAtOf(chat.counterpartOf(userId));
-        Message message = store(chat, userId, clean, null);
+        Message message = store(chat, userId, clean, null, attachment);
         notices.messageSent(chat, userId, clean, recipientReadAt);
         return message;
     }
@@ -172,7 +197,7 @@ public class ChatService {
         } catch (DataIntegrityViolationException e) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Poprzednia propozycja czeka jeszcze na odpowiedź sprzedawcy.");
         }
-        Message message = store(chat, userId, "Propozycja ceny: " + ChatNotifications.money(offer), offer.getId());
+        Message message = store(chat, userId, "Propozycja ceny: " + ChatNotifications.money(offer), offer.getId(), null);
         notices.priceProposed(chat, offer);
         return message;
     }
@@ -210,9 +235,10 @@ public class ChatService {
         return chat;
     }
 
-    private Message store(Chat chat, UUID senderId, String text, UUID priceOfferId) {
+    private Message store(Chat chat, UUID senderId, String text, UUID priceOfferId, Attachment attachment) {
         Instant now = clock.instant();
-        Message message = messages.saveAndFlush(new Message(chat.getId(), senderId, text, priceOfferId, now));
+        Message message = messages.saveAndFlush(new Message(chat.getId(), senderId, text, priceOfferId,
+                attachment == null ? null : attachment.mediaId(), attachment == null ? null : attachment.contentType(), now));
         chats.recordMessage(chat.getId(), senderId, ChatNotifications.excerpt(text), now);
         return message;
     }

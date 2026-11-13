@@ -18,7 +18,7 @@ public final class ChatDtos {
     public record CreateChatRequest(@NotNull(message = "Wybierz ofertę, o którą chcesz zapytać.") UUID offerId) {
     }
 
-    /** {@code attachmentMediaId} jest rozpoznawane, ale załączniki nie są jeszcze obsługiwane (422). */
+    /** {@code attachmentMediaId}: plik {@code CHAT_ATTACHMENT} wgrany wcześniej do media-service przez wysyłającego. */
     public record SendMessageRequest(
             @NotBlank(message = "Napisz wiadomość.") @Size(max = 2000, message = "Wiadomość może mieć do 2000 znaków.") String text,
             UUID attachmentMediaId) {
@@ -44,8 +44,9 @@ public final class ChatDtos {
     public record PriceOffer(UUID id, Money price, String status) {
     }
 
+    /** {@code attachmentUrl}: podpisany, krótko ważny adres pliku; {@code attachmentContentType}: jego typ (obraz albo PDF). */
     public record Message(UUID id, UUID chatId, boolean mine, String text, Instant sentAt, String status, String attachmentUrl,
-                          PriceOffer priceOffer) {
+                          String attachmentContentType, PriceOffer priceOffer) {
     }
 
     public record UnreadCount(long count) {

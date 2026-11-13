@@ -44,6 +44,8 @@ import pl.rynek.chat.TestcontainersConfig;
 import pl.rynek.chat.clients.CatalogClient;
 import pl.rynek.chat.clients.CatalogClient.OfferInfo;
 import pl.rynek.chat.clients.IdentityClient;
+import pl.rynek.chat.clients.MediaClient;
+import pl.rynek.chat.clients.MediaClient.File;
 import pl.rynek.chat.clients.NotificationClient;
 
 /** Rozmowy na prawdziwym PostgreSQL; catalog, identity i notification to atrapy. Tokeny testowe: {@code user-<uuid>}. */
@@ -66,6 +68,9 @@ class ChatFlowTests {
 
     @MockitoBean
     NotificationClient notifications;
+
+    @MockitoBean
+    MediaClient media;
 
     @BeforeEach
     void stubs() {
@@ -157,10 +162,6 @@ class ChatFlowTests {
 
         send(buyer, id, "  ").andExpect(status().isBadRequest()).andExpect(jsonPath("$.detail").value("Napisz wiadomość."));
         send(buyer, id, "x".repeat(2001)).andExpect(status().isBadRequest());
-        mvc.perform(post("/api/v1/chats/" + id + "/messages").header(HttpHeaders.AUTHORIZATION, bearer(buyer))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"Zdjęcie\",\"attachmentMediaId\":\"" + UUID.randomUUID() + "\"}"))
-                .andExpect(status().isUnprocessableContent())
-                .andExpect(jsonPath("$.detail").value("Załączniki w rozmowach będą dostępne wkrótce."));
 
         send(buyer, id, " Dzień dobry ").andExpect(status().isCreated())
                 .andExpect(jsonPath("$.text").value("Dzień dobry"))
@@ -189,6 +190,53 @@ class ChatFlowTests {
         messages(seller, id, "").andExpect(jsonPath("$.items[2].status").value("Przeczytano"));
         // Własna wiadomość nie zwiększa własnego licznika.
         unreadCount(seller).andExpect(jsonPath("$.count").value(0));
+    }
+
+    /** Załącznik to własny, gotowy plik CHAT_ATTACHMENT z media-service; obie strony oglądają go pod podpisanym adresem. */
+    @Test
+    void attachmentIsSharedWithBothParticipants() throws Exception {
+        UUID seller = UUID.randomUUID();
+        UUID buyer = UUID.randomUUID();
+        String id = chat(buyer, offer(seller, true));
+        UUID photo = file(buyer, "CHAT_ATTACHMENT", "image/png");
+        given(media.url(photo)).willReturn(Optional.of("http://s3.local/chat/photo.png?X-Amz-Signature=abc"));
+
+        sendWithAttachment(buyer, id, "Załącznik: zdjecie.png", photo).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.text").value("Załącznik: zdjecie.png"))
+                .andExpect(jsonPath("$.attachmentUrl").value("http://s3.local/chat/photo.png?X-Amz-Signature=abc"))
+                .andExpect(jsonPath("$.attachmentContentType").value("image/png"));
+        // Obie strony widzą ten sam załącznik w historii (adres podpisuje media-service na żądanie chatu).
+        for (UUID user : List.of(buyer, seller)) {
+            messages(user, id, "").andExpect(jsonPath("$.items[0].attachmentUrl").value("http://s3.local/chat/photo.png?X-Amz-Signature=abc"))
+                    .andExpect(jsonPath("$.items[0].attachmentContentType").value("image/png"));
+        }
+        list(seller, "").andExpect(jsonPath("$.items[0].lastMessage").value("Załącznik: zdjecie.png"));
+        verify(notifications).send(eq(seller), eq("messages"), eq("Nowa wiadomość"), eq("Anna Nowak: Załącznik: zdjecie.png"),
+                eq("/wiadomosci/" + id), anyString());
+
+        // Brak adresu (media-service nie odpowiada) nie psuje historii: wiadomość jest, bez podglądu.
+        given(media.url(photo)).willReturn(Optional.empty());
+        messages(seller, id, "").andExpect(status().isOk()).andExpect(jsonPath("$.items[0].text").value("Załącznik: zdjecie.png"))
+                .andExpect(jsonPath("$.items[0].attachmentUrl").doesNotExist());
+        // Wiadomość bez załącznika nie ma pól załącznika.
+        send(seller, id, "Dziękuję").andExpect(status().isCreated()).andExpect(jsonPath("$.attachmentUrl").doesNotExist())
+                .andExpect(jsonPath("$.attachmentContentType").doesNotExist());
+
+        String detail = "Nie znaleźliśmy tego załącznika. Wyślij plik jeszcze raz.";
+        // Cudzy plik, zły rodzaj pliku i nieistniejący plik dają 422.
+        sendWithAttachment(buyer, id, "Cudzy", file(seller, "CHAT_ATTACHMENT", "image/png")).andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.detail").value(detail));
+        sendWithAttachment(buyer, id, "Dokument", file(buyer, "KYC_DOCUMENT", "application/pdf")).andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.detail").value(detail));
+        sendWithAttachment(buyer, id, "Zdjęcie oferty", file(buyer, "OFFER_PHOTO", "image/png")).andExpect(status().isUnprocessableContent());
+        given(media.file(any())).willReturn(Optional.empty());
+        sendWithAttachment(buyer, id, "Brak", UUID.randomUUID()).andExpect(status().isUnprocessableContent()).andExpect(jsonPath("$.detail").value(detail));
+        // Obcy w rozmowie nie dowie się nawet, czy plik istnieje: 404 jak dla cudzej rozmowy.
+        sendWithAttachment(UUID.randomUUID(), id, "Obcy", photo).andExpect(status().isNotFound());
+        // Zablokowana rozmowa nie przyjmuje załączników.
+        mvc.perform(post("/api/v1/chats/" + id + "/block").header(HttpHeaders.AUTHORIZATION, bearer(seller))).andExpect(status().isNoContent());
+        UUID blockedPhoto = file(buyer, "CHAT_ATTACHMENT", "image/png");
+        sendWithAttachment(buyer, id, "Zdjęcie", blockedPhoto).andExpect(status().isForbidden());
     }
 
     @Test
@@ -344,6 +392,18 @@ class ChatFlowTests {
     private ResultActions send(UUID user, String chatId, String text) throws Exception {
         return mvc.perform(post("/api/v1/chats/" + chatId + "/messages").header(HttpHeaders.AUTHORIZATION, bearer(user))
                 .contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"" + text + "\"}"));
+    }
+
+    /** Plik w atrapie media-service: {@code owner} wgrał go z podanym przeznaczeniem i typem. */
+    private UUID file(UUID owner, String purpose, String contentType) {
+        UUID id = UUID.randomUUID();
+        given(media.file(id)).willReturn(Optional.of(new File(id, owner, purpose, contentType)));
+        return id;
+    }
+
+    private ResultActions sendWithAttachment(UUID user, String chatId, String text, UUID mediaId) throws Exception {
+        return mvc.perform(post("/api/v1/chats/" + chatId + "/messages").header(HttpHeaders.AUTHORIZATION, bearer(user))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"" + text + "\",\"attachmentMediaId\":\"" + mediaId + "\"}"));
     }
 
     private ResultActions priceOffer(UUID user, String chatId, long amount, String currency) throws Exception {

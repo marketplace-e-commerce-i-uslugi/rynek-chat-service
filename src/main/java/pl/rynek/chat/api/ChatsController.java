@@ -77,19 +77,24 @@ public class ChatsController {
         CursorPage<Message> newestFirst = Cursors.page(cursor, limit == null ? Cursors.MAX_LIMIT : limit, (offset, n) -> chats.messages(me, chatId, offset, n), m -> m);
         Map<UUID, PriceOffer> offers = chats.priceOffersOf(newestFirst.items());
         List<ChatDtos.Message> items = new ArrayList<>(newestFirst.items().stream()
-                .map(m -> views.message(m, chat, me, m.getPriceOfferId() == null ? null : offers.get(m.getPriceOfferId()))).toList());
+                .map(m -> views.message(m, chat, me, m.getPriceOfferId() == null ? null : offers.get(m.getPriceOfferId()),
+                        chats.attachmentUrl(m).orElse(null))).toList());
         Collections.reverse(items);
         return new CursorPage<>(items, newestFirst.nextCursor());
     }
 
-    /** Wysłanie wiadomości tekstowej. Załączniki (`attachmentMediaId`) dają na razie 422. */
+    /**
+     * Wysłanie wiadomości z opcjonalnym załącznikiem ({@code attachmentMediaId}: własny plik {@code CHAT_ATTACHMENT}
+     * z media-service, inaczej 422).
+     */
     @PostMapping("/api/v1/chats/{chatId}/messages")
     @ResponseStatus(HttpStatus.CREATED)
     public ChatDtos.Message createMessage(@AuthenticationPrincipal Jwt token, @PathVariable UUID chatId,
                                           @Valid @RequestBody ChatDtos.SendMessageRequest request) {
         UUID me = user(token);
-        Message message = chats.send(me, chatId, request.text(), request.attachmentMediaId());
-        return views.message(message, chats.visible(me, chatId), me, null);
+        ChatService.Attachment attachment = chats.attachment(me, chatId, request.attachmentMediaId());
+        Message message = chats.send(me, chatId, request.text(), attachment);
+        return views.message(message, chats.visible(me, chatId), me, null, chats.attachmentUrl(message).orElse(null));
     }
 
     /** Oznaczenie rozmowy jako przeczytanej (zeruje licznik i ustawia status „Przeczytano” u rozmówcy). */

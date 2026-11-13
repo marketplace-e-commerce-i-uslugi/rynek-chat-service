@@ -30,11 +30,20 @@ public class Message {
     @Column(name = "sent_at")
     private Instant sentAt;
 
+    @Column(name = "attachment_media_id")
+    private UUID attachmentMediaId;
+
+    @Column(name = "attachment_content_type")
+    private String attachmentContentType;
+
     protected Message() {
     }
 
-    public Message(UUID chatId, UUID senderId, String text, UUID priceOfferId, Instant sentAt) {
+    public Message(UUID chatId, UUID senderId, String text, UUID priceOfferId, UUID attachmentMediaId, String attachmentContentType,
+                   Instant sentAt) {
         this.id = UUID.randomUUID();
+        this.attachmentMediaId = attachmentMediaId;
+        this.attachmentContentType = attachmentContentType;
         this.chatId = chatId;
         this.senderId = senderId;
         this.text = text;
@@ -64,5 +73,13 @@ public class Message {
 
     public Instant getSentAt() {
         return sentAt;
+    }
+
+    public UUID getAttachmentMediaId() {
+        return attachmentMediaId;
+    }
+
+    public String getAttachmentContentType() {
+        return attachmentContentType;
     }
 }

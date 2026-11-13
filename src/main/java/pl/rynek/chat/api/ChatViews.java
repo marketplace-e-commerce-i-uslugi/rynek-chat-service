@@ -23,14 +23,15 @@ class ChatViews {
     }
 
     /**
-     * Status „Przeczytano” dla wiadomości, którą druga strona (a dla cudzych: ja) przeczytała po jej wysłaniu. Załączników
-     * nie ma, więc {@code attachmentUrl} jest zawsze pusty.
+     * Status „Przeczytano” dla wiadomości, którą druga strona (a dla cudzych: ja) przeczytała po jej wysłaniu.
+     * {@code attachmentUrl} to adres załącznika wyznaczony wcześniej przez wołającego (pusty bez załącznika).
      */
-    ChatDtos.Message message(Message m, Chat chat, UUID me, PriceOffer offer) {
+    ChatDtos.Message message(Message m, Chat chat, UUID me, PriceOffer offer, String attachmentUrl) {
         boolean mine = m.getSenderId().equals(me);
         UUID reader = mine ? chat.counterpartOf(me) : me;
         String status = chat.readAtOf(reader).isBefore(m.getSentAt()) ? "Wysłano" : "Przeczytano";
-        return new ChatDtos.Message(m.getId(), m.getChatId(), mine, m.getText(), m.getSentAt(), status, null, offer == null ? null : priceOffer(offer));
+        return new ChatDtos.Message(m.getId(), m.getChatId(), mine, m.getText(), m.getSentAt(), status, attachmentUrl,
+                m.getAttachmentContentType(), offer == null ? null : priceOffer(offer));
     }
 
     ChatDtos.PriceOffer priceOffer(PriceOffer offer) {
