@@ -1,113 +1,149 @@
 package pl.rynek.chat.api;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
-import pl.rynek.chat.api.dto.CreateChatRequest;
-import pl.rynek.chat.api.dto.CreateMessageRequest;
-import pl.rynek.chat.api.dto.CreatePriceOfferRequest;
+import pl.rynek.chat.api.dto.ChatDtos;
+import pl.rynek.chat.api.dto.CursorPage;
+import pl.rynek.chat.chats.Chat;
+import pl.rynek.chat.chats.ChatService;
+import pl.rynek.chat.chats.Message;
+import pl.rynek.chat.chats.PriceOffer;
+import pl.rynek.chat.clients.CatalogClient;
 
-import static pl.rynek.chat.common.NotImplemented.notImplemented;
-
+/** Rozmowy i wiadomości. Dostęp: user (uczestnik rozmowy); odpowiedź na propozycję ceny: sprzedawca tej rozmowy. */
 @RestController
 public class ChatsController {
 
-    /**
-     * Lista rozmów (Wszystkie / Kupuję / Sprzedaję). Dostęp: user.
-     */
+    private final ChatService chats;
+    private final ChatViews views;
+    private final CatalogClient catalog;
+
+    public ChatsController(ChatService chats, ChatViews views, CatalogClient catalog) {
+        this.chats = chats;
+        this.views = views;
+        this.catalog = catalog;
+    }
+
+    /** Lista rozmów od ostatniej aktywności; {@code role}: {@code buying} (Kupuję) albo {@code selling} (Sprzedaję). */
     @GetMapping("/api/v1/chats")
-    public void listChats(@RequestParam(required = false) String role, @RequestParam(required = false) String cursor) {
-        throw notImplemented();
+    public CursorPage<ChatDtos.ChatSummary> listChats(@AuthenticationPrincipal Jwt token, @RequestParam(required = false) String role,
+                                                      @RequestParam(required = false) String cursor, @RequestParam(required = false) Integer limit) {
+        UUID me = user(token);
+        CursorPage<Chat> page = Cursors.page(cursor, limit, (offset, n) -> chats.list(me, role, offset, n), c -> c);
+        // Liczniki nieprzeczytanych dla całej strony naraz, nie osobnym zapytaniem na rozmowę.
+        Map<UUID, Integer> unread = chats.unread(me, page.items());
+        return new CursorPage<>(page.items().stream().map(c -> views.summary(c, me, unread.get(c.getId()))).toList(), page.nextCursor());
     }
 
-    /**
-     * Rozpoczęcie rozmowy z kontekstem oferty (offerId). Dostęp: user.
-     */
+    /** Rozpoczęcie rozmowy z kontekstem oferty; istniejąca rozmowa o tej ofercie jest zwracana ponownie. */
     @PostMapping("/api/v1/chats")
-    public void createChat(@RequestBody CreateChatRequest request) {
-        throw notImplemented();
+    @ResponseStatus(HttpStatus.CREATED)
+    public ChatDtos.Chat createChat(@AuthenticationPrincipal Jwt token, @Valid @RequestBody ChatDtos.CreateChatRequest request) {
+        UUID me = user(token);
+        return detail(chats.open(me, request.offerId()), me);
     }
 
-    /**
-     * Rozmowa wraz z przypiętą ofertą. Dostęp: user.
-     */
+    /** Rozmowa z przypiętą kartą oferty (pustą, gdy oferty już nie ma). */
     @GetMapping("/api/v1/chats/{chatId}")
-    public void getChat(@PathVariable String chatId) {
-        throw notImplemented();
+    public ChatDtos.Chat getChat(@AuthenticationPrincipal Jwt token, @PathVariable UUID chatId) {
+        UUID me = user(token);
+        return detail(chats.visible(me, chatId), me);
     }
 
     /**
-     * Historia wiadomości. Dostęp: user.
+     * Historia: pierwsza strona to najnowsze wiadomości, w kolejności czytania (od najstarszej do najnowszej);
+     * {@code nextCursor} prowadzi do starszych.
      */
     @GetMapping("/api/v1/chats/{chatId}/messages")
-    public void listMessages(@PathVariable String chatId, @RequestParam(required = false) String cursor) {
-        throw notImplemented();
+    public CursorPage<ChatDtos.Message> listMessages(@AuthenticationPrincipal Jwt token, @PathVariable UUID chatId,
+                                                     @RequestParam(required = false) String cursor, @RequestParam(required = false) Integer limit) {
+        UUID me = user(token);
+        Chat chat = chats.visible(me, chatId);
+        CursorPage<Message> newestFirst = Cursors.page(cursor, limit == null ? Cursors.MAX_LIMIT : limit, (offset, n) -> chats.messages(me, chatId, offset, n), m -> m);
+        Map<UUID, PriceOffer> offers = chats.priceOffersOf(newestFirst.items());
+        List<ChatDtos.Message> items = new ArrayList<>(newestFirst.items().stream()
+                .map(m -> views.message(m, chat, me, m.getPriceOfferId() == null ? null : offers.get(m.getPriceOfferId()))).toList());
+        Collections.reverse(items);
+        return new CursorPage<>(items, newestFirst.nextCursor());
     }
 
-    /**
-     * Wysłanie wiadomości (tekst, załącznik mediaId). Dostęp: user.
-     */
+    /** Wysłanie wiadomości tekstowej. Załączniki (`attachmentMediaId`) dają na razie 422. */
     @PostMapping("/api/v1/chats/{chatId}/messages")
-    public void createMessage(@PathVariable String chatId, @RequestBody CreateMessageRequest request) {
-        throw notImplemented();
+    @ResponseStatus(HttpStatus.CREATED)
+    public ChatDtos.Message createMessage(@AuthenticationPrincipal Jwt token, @PathVariable UUID chatId,
+                                          @Valid @RequestBody ChatDtos.SendMessageRequest request) {
+        UUID me = user(token);
+        Message message = chats.send(me, chatId, request.text(), request.attachmentMediaId());
+        return views.message(message, chats.visible(me, chatId), me, null);
     }
 
-    /**
-     * Oznaczenie jako przeczytane. Dostęp: user.
-     */
+    /** Oznaczenie rozmowy jako przeczytanej (zeruje licznik i ustawia status „Przeczytano” u rozmówcy). */
     @PostMapping("/api/v1/chats/{chatId}/read")
-    public void markAsRead(@PathVariable String chatId) {
-        throw notImplemented();
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void markAsRead(@AuthenticationPrincipal Jwt token, @PathVariable UUID chatId) {
+        chats.markRead(user(token), chatId);
     }
 
-    /**
-     * „Zaproponuj cenę”. Dostęp: user.
-     */
+    /** „Zaproponuj cenę”: kupujący, jedna oczekująca propozycja naraz. */
     @PostMapping("/api/v1/chats/{chatId}/price-offers")
-    public void createPriceOffer(@PathVariable String chatId, @RequestBody CreatePriceOfferRequest request) {
-        throw notImplemented();
+    @ResponseStatus(HttpStatus.CREATED)
+    public ChatDtos.PriceOffer createPriceOffer(@AuthenticationPrincipal Jwt token, @PathVariable UUID chatId,
+                                                @Valid @RequestBody ChatDtos.CreatePriceOfferRequest request) {
+        UUID me = user(token);
+        Message message = chats.proposePrice(me, chatId, request.price().amount(), request.price().currency());
+        return views.priceOffer(chats.priceOffersOf(List.of(message)).get(message.getPriceOfferId()));
     }
 
-    /**
-     * Akceptacja propozycji ceny. Dostęp: seller.
-     */
     @PostMapping("/api/v1/chats/{chatId}/price-offers/{priceOfferId}/accept")
-    public void acceptPriceOffer(@PathVariable String chatId, @PathVariable String priceOfferId) {
-        throw notImplemented();
+    public ChatDtos.PriceOffer acceptPriceOffer(@AuthenticationPrincipal Jwt token, @PathVariable UUID chatId, @PathVariable UUID priceOfferId) {
+        return views.priceOffer(chats.decide(user(token), chatId, priceOfferId, true));
     }
 
-    /**
-     * Odrzucenie. Dostęp: seller.
-     */
     @PostMapping("/api/v1/chats/{chatId}/price-offers/{priceOfferId}/decline")
-    public void declinePriceOffer(@PathVariable String chatId, @PathVariable String priceOfferId) {
-        throw notImplemented();
+    public ChatDtos.PriceOffer declinePriceOffer(@AuthenticationPrincipal Jwt token, @PathVariable UUID chatId, @PathVariable UUID priceOfferId) {
+        return views.priceOffer(chats.decide(user(token), chatId, priceOfferId, false));
     }
 
-    /**
-     * Zablokowanie rozmówcy. Dostęp: user.
-     */
+    /** Blokuje rozmówcę we wszystkich rozmowach tej pary. */
     @PostMapping("/api/v1/chats/{chatId}/block")
-    public void blockParticipant(@PathVariable String chatId) {
-        throw notImplemented();
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void blockParticipant(@AuthenticationPrincipal Jwt token, @PathVariable UUID chatId) {
+        chats.block(user(token), chatId);
     }
 
-    /**
-     * Szybkie odpowiedzi („Czy nadal aktualne?”…). Dostęp: user.
-     */
+    /** Szybkie odpowiedzi; {@code context}: {@code offer} (domyślnie) albo {@code service}. */
     @GetMapping("/api/v1/chats/quick-replies")
-    public void getQuickReplies(@RequestParam(required = false) String context) {
-        throw notImplemented();
+    public List<String> getQuickReplies(@RequestParam(required = false) String context) {
+        return ChatService.quickReplies(context);
     }
 
-    /**
-     * Licznik nieprzeczytanych (ikona w pasku nawigacji). Dostęp: user.
-     */
+    /** Licznik nieprzeczytanych wiadomości do ikony w pasku nawigacji. */
     @GetMapping("/api/v1/chats/unread-count")
-    public void getUnreadCount() {
-        throw notImplemented();
+    public ChatDtos.UnreadCount getUnreadCount(@AuthenticationPrincipal Jwt token) {
+        return new ChatDtos.UnreadCount(chats.unreadCount(user(token)));
+    }
+
+    private ChatDtos.Chat detail(Chat chat, UUID me) {
+        int unread = chats.unread(me, List.of(chat)).get(chat.getId());
+        return views.detail(chat, me, unread, catalog.card(chat.getOfferId()).orElse(null), chats.blocked(chat));
+    }
+
+    private static UUID user(Jwt token) {
+        return UUID.fromString(token.getSubject());
     }
 }
