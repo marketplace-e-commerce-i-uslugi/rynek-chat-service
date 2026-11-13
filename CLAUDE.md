@@ -2,7 +2,7 @@
 
 Mikroserwis platformy **Rynek**: `chat-service` — wiadomości
 
-Zakres, endpointy i zdarzenia są opisane w `README.md`. Rozmowy działają przez REST (PostgreSQL + Flyway, JWT z JWKS identity). Załączniki działają (pliki z media-service). Kanału na żywo (WebSocket/STOMP) i Kafki jeszcze nie ma: nie dodawaj ich bez wyraźnej prośby.
+Zakres, endpointy i zdarzenia są opisane w `README.md`. Rozmowy działają przez REST (PostgreSQL + Flyway, JWT z JWKS identity). Załączniki działają (pliki z media-service), a kanał na żywo (`/ws/chat`, STOMP z tokenem w ramce CONNECT) dostarcza rozmówcy nowe wiadomości, przeczytanie i „pisze…”. Kafki ani zewnętrznego brokera STOMP jeszcze nie ma: nie dodawaj ich bez wyraźnej prośby.
 
 ## Wspólne konwencje API (§1 dokumentu architektury)
 
@@ -24,7 +24,7 @@ Legenda kolumny **Dostęp**: `pub` = bez logowania, `user` = zalogowany, `seller
 ## Stack
 
 - Java 25, Spring Boot 4.1 (Maven, `./mvnw`)
-- Dane: PostgreSQL (Flyway); testy na Testcontainers; WebSocket/STOMP docelowo
+- Dane: PostgreSQL (Flyway); testy na Testcontainers; WebSocket/STOMP (broker w pamięci)
 - Zdarzenia: Kafka, nazwy `domena.zdarzenie`
 
 ## Powiązane repozytoria
@@ -35,6 +35,6 @@ Legenda kolumny **Dostęp**: `pub` = bez logowania, `user` = zalogowany, `seller
 
 ## Struktura kodu
 
-- `pl.rynek.chat.api`: kontroler REST (pełne ścieżki w adnotacjach), `ChatViews` (widoki z perspektywy użytkownika), `api.dto`: rekordy żądań i odpowiedzi; `chats`: rozmowa, wiadomość, propozycja ceny, blokada, `ChatService`, `ChatNotifications`; `clients`: catalog, identity, media, notification; `config`: security (JWT z JWKS), błędy RFC 7807 po polsku
+- `pl.rynek.chat.api`: kontroler REST (pełne ścieżki w adnotacjach), `ChatViews` (widoki z perspektywy użytkownika), `ChatEvents` i `ChatTypingController` (zdarzenia na żywo), `api.dto`: rekordy żądań i odpowiedzi; `chats`: rozmowa, wiadomość, propozycja ceny, blokada, `ChatService`, `ChatNotifications`; `clients`: catalog, identity, media, notification; `config`: security (JWT z JWKS), `WebSocketConfig` i `StompAuthInterceptor` (kanał na żywo), błędy RFC 7807 po polsku
 - Konfiguracja: `src/main/resources/application.yml`
 - Port lokalny: 8089

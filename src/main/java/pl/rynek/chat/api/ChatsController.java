@@ -32,11 +32,13 @@ public class ChatsController {
     private final ChatService chats;
     private final ChatViews views;
     private final CatalogClient catalog;
+    private final ChatEvents events;
 
-    public ChatsController(ChatService chats, ChatViews views, CatalogClient catalog) {
+    public ChatsController(ChatService chats, ChatViews views, CatalogClient catalog, ChatEvents events) {
         this.chats = chats;
         this.views = views;
         this.catalog = catalog;
+        this.events = events;
     }
 
     /** Lista rozmów od ostatniej aktywności; {@code role}: {@code buying} (Kupuję) albo {@code selling} (Sprzedaję). */
@@ -94,14 +96,18 @@ public class ChatsController {
         UUID me = user(token);
         ChatService.Attachment attachment = chats.attachment(me, chatId, request.attachmentMediaId());
         Message message = chats.send(me, chatId, request.text(), attachment);
-        return views.message(message, chats.visible(me, chatId), me, null, chats.attachmentUrl(message).orElse(null));
+        Chat chat = chats.visible(me, chatId);
+        events.messageSent(chat, me, message, null);
+        return views.message(message, chat, me, null, chats.attachmentUrl(message).orElse(null));
     }
 
     /** Oznaczenie rozmowy jako przeczytanej (zeruje licznik i ustawia status „Przeczytano” u rozmówcy). */
     @PostMapping("/api/v1/chats/{chatId}/read")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void markAsRead(@AuthenticationPrincipal Jwt token, @PathVariable UUID chatId) {
-        chats.markRead(user(token), chatId);
+        UUID me = user(token);
+        chats.markRead(me, chatId);
+        events.read(chats.visible(me, chatId), me);
     }
 
     /** „Zaproponuj cenę”: kupujący, jedna oczekująca propozycja naraz. */
@@ -111,7 +117,9 @@ public class ChatsController {
                                                 @Valid @RequestBody ChatDtos.CreatePriceOfferRequest request) {
         UUID me = user(token);
         Message message = chats.proposePrice(me, chatId, request.price().amount(), request.price().currency());
-        return views.priceOffer(chats.priceOffersOf(List.of(message)).get(message.getPriceOfferId()));
+        PriceOffer offer = chats.priceOffersOf(List.of(message)).get(message.getPriceOfferId());
+        events.messageSent(chats.visible(me, chatId), me, message, offer);
+        return views.priceOffer(offer);
     }
 
     @PostMapping("/api/v1/chats/{chatId}/price-offers/{priceOfferId}/accept")

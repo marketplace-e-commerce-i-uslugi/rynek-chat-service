@@ -51,4 +51,11 @@ public final class ChatDtos {
 
     public record UnreadCount(long count) {
     }
+
+    /**
+     * Zdarzenie na żywo ({@code /user/queue/chat}): {@code type} to {@code message} (z {@code message} w widoku odbiorcy),
+     * {@code read} albo {@code typing}.
+     */
+    public record ChatEvent(String type, UUID chatId, Message message) {
+    }
 }

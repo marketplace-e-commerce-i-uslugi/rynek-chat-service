@@ -117,6 +117,12 @@ public class ChatService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Nie znaleźliśmy takiej rozmowy."));
     }
 
+    /** Rozmówca, któremu wolno wysłać „pisze…”: rozmowa musi być widoczna i niezablokowana, inaczej pusty wynik (bez błędu). */
+    @Transactional(readOnly = true)
+    public Optional<UUID> typingTarget(UUID userId, UUID chatId) {
+        return chats.findById(chatId).filter(c -> c.hasParticipant(userId)).filter(c -> !blocked(c)).map(c -> c.counterpartOf(userId));
+    }
+
     @Transactional(readOnly = true)
     public boolean blocked(Chat chat) {
         return blocks.between(chat.getBuyerId(), chat.getSellerId());

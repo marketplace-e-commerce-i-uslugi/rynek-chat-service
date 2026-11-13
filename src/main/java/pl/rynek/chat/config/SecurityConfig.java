@@ -19,6 +19,7 @@ import org.springframework.security.oauth2.server.resource.web.DefaultBearerToke
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import org.springframework.security.web.util.matcher.OrRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import pl.rynek.chat.common.ProblemJson;
 
@@ -30,7 +31,11 @@ import pl.rynek.chat.common.ProblemJson;
 @Configuration
 public class SecurityConfig {
 
-    private static final RequestMatcher PUBLIC = PathPatternRequestMatcher.withDefaults().matcher("/internal/**");
+    // /ws/chat: przeglądarka nie dodaje nagłówka Authorization do uzgadniania WebSocketu, więc token sprawdza dopiero
+    // StompAuthInterceptor w ramce CONNECT. /internal/** służy komunikacji między serwisami.
+    private static final RequestMatcher PUBLIC = new OrRequestMatcher(
+            PathPatternRequestMatcher.withDefaults().matcher("/internal/**"),
+            PathPatternRequestMatcher.withDefaults().matcher("/ws/chat/**"));
 
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
