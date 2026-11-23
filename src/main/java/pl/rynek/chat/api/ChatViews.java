@@ -13,6 +13,12 @@ import pl.rynek.chat.chats.PriceOffer;
 @Component
 class ChatViews {
 
+    private final java.time.Duration priceOfferValidity;
+
+    ChatViews(@org.springframework.beans.factory.annotation.Value("${rynek.chat.price-offer-validity:24h}") java.time.Duration priceOfferValidity) {
+        this.priceOfferValidity = priceOfferValidity;
+    }
+
     ChatDtos.ChatSummary summary(Chat chat, UUID me, int unread) {
         return new ChatDtos.ChatSummary(chat.getId(), role(chat, me), counterpart(chat, me), lastMessage(chat), lastMessageAt(chat), unread);
     }
@@ -35,7 +41,8 @@ class ChatViews {
     }
 
     ChatDtos.PriceOffer priceOffer(PriceOffer offer) {
-        return new ChatDtos.PriceOffer(offer.getId(), new ChatDtos.Money(offer.getAmount(), offer.getCurrency()), offer.getStatus());
+        return new ChatDtos.PriceOffer(offer.getId(), new ChatDtos.Money(offer.getAmount(), offer.getCurrency()), offer.getStatus(),
+                offer.expiresAt(priceOfferValidity), offer.getUsedAt() != null);
     }
 
     private static String role(Chat chat, UUID me) {

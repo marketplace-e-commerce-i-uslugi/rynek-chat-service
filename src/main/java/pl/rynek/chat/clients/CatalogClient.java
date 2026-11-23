@@ -63,6 +63,10 @@ public class CatalogClient {
     }
 
     /** {@code available}: oferta jest opublikowana; {@code ownerId} to właściciel (sprzedawca). */
-    public record OfferInfo(UUID offerId, boolean available, String title, UUID channelId, UUID ownerId) {
+    public record OfferInfo(UUID offerId, boolean available, String title, UUID channelId, UUID ownerId, Money price) {
+    }
+
+    /** Cena z catalog w groszach ({@code amount}); brak ceny (stara odpowiedź) wyłącza porównanie. */
+    public record Money(long amount, String currency) {
     }
 }

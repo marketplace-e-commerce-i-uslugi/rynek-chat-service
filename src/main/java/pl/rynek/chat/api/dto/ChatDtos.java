@@ -41,7 +41,8 @@ public final class ChatDtos {
                        Map<String, Object> offer, boolean blocked, String responseTime) {
     }
 
-    public record PriceOffer(UUID id, Money price, String status) {
+    /** {@code expiresAt}: do kiedy zaakceptowana cena obowiązuje (brak przed akceptacją); {@code used}: wykorzystana w zamówieniu. */
+    public record PriceOffer(UUID id, Money price, String status, Instant expiresAt, boolean used) {
     }
 
     /** {@code attachmentUrl}: podpisany, krótko ważny adres pliku; {@code attachmentContentType}: jego typ (obraz albo PDF). */
@@ -54,7 +55,7 @@ public final class ChatDtos {
 
     /**
      * Zdarzenie na żywo ({@code /user/queue/chat}): {@code type} to {@code message} (z {@code message} w widoku odbiorcy),
-     * {@code read} albo {@code typing}.
+     * {@code read}, {@code typing} albo {@code price-decided}.
      */
     public record ChatEvent(String type, UUID chatId, Message message) {
     }

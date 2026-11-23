@@ -124,12 +124,18 @@ public class ChatsController {
 
     @PostMapping("/api/v1/chats/{chatId}/price-offers/{priceOfferId}/accept")
     public ChatDtos.PriceOffer acceptPriceOffer(@AuthenticationPrincipal Jwt token, @PathVariable UUID chatId, @PathVariable UUID priceOfferId) {
-        return views.priceOffer(chats.decide(user(token), chatId, priceOfferId, true));
+        UUID me = user(token);
+        ChatDtos.PriceOffer decided = views.priceOffer(chats.decide(me, chatId, priceOfferId, true));
+        events.priceDecided(chats.visible(me, chatId), me);
+        return decided;
     }
 
     @PostMapping("/api/v1/chats/{chatId}/price-offers/{priceOfferId}/decline")
     public ChatDtos.PriceOffer declinePriceOffer(@AuthenticationPrincipal Jwt token, @PathVariable UUID chatId, @PathVariable UUID priceOfferId) {
-        return views.priceOffer(chats.decide(user(token), chatId, priceOfferId, false));
+        UUID me = user(token);
+        ChatDtos.PriceOffer decided = views.priceOffer(chats.decide(me, chatId, priceOfferId, false));
+        events.priceDecided(chats.visible(me, chatId), me);
+        return decided;
     }
 
     /** Blokuje rozmówcę we wszystkich rozmowach tej pary. */

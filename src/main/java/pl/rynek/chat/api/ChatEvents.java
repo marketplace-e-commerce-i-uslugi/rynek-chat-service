@@ -44,6 +44,11 @@ class ChatEvents {
         push(chat.counterpartOf(readerId), new ChatDtos.ChatEvent("read", chat.getId(), null));
     }
 
+    /** Sprzedawca przyjął albo odrzucił propozycję ceny: kupujący odświeża wiadomość z propozycją. */
+    void priceDecided(Chat chat, UUID deciderId) {
+        push(chat.counterpartOf(deciderId), new ChatDtos.ChatEvent("price-decided", chat.getId(), null));
+    }
+
     void typing(UUID chatId, UUID to) {
         push(to, new ChatDtos.ChatEvent("typing", chatId, null));
     }

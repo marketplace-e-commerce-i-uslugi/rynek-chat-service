@@ -41,9 +41,12 @@ public class ChatService {
     private final MediaClient media;
     private final ChatNotifications notices;
     private final Clock clock;
+    private final java.time.Duration priceOfferValidity;
 
     public ChatService(ChatRepository chats, MessageRepository messages, PriceOfferRepository priceOffers, BlockRepository blocks,
-                       CatalogClient catalog, IdentityClient identity, MediaClient media, ChatNotifications notices, Clock clock) {
+                       CatalogClient catalog, IdentityClient identity, MediaClient media, ChatNotifications notices, Clock clock,
+                       @org.springframework.beans.factory.annotation.Value("${rynek.chat.price-offer-validity:24h}") java.time.Duration priceOfferValidity) {
+        this.priceOfferValidity = priceOfferValidity;
         this.chats = chats;
         this.messages = messages;
         this.priceOffers = priceOffers;
@@ -197,6 +200,10 @@ public class ChatService {
         if (!CURRENCY.equals(currency)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cenę podaj w złotych (PLN).");
         }
+        OfferInfo listed = catalog.offer(chat.getOfferId()).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Oferta nie jest już dostępna."));
+        if (listed.price() != null && amount > listed.price().amount()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Proponowana cena nie może być wyższa od ceny oferty.");
+        }
         PriceOffer offer;
         try {
             offer = priceOffers.saveAndFlush(new PriceOffer(chatId, amount, currency, clock.instant()));
@@ -223,6 +230,40 @@ public class ChatService {
         PriceOffer decided = priceOffers.findById(priceOfferId).orElseThrow();
         notices.priceDecided(chat, decided, accept);
         return decided;
+    }
+
+    public java.time.Duration priceOfferValidity() {
+        return priceOfferValidity;
+    }
+
+    /**
+     * Wykorzystanie zaakceptowanej ceny przy zamówieniu (order-service): tylko kupujący z tej rozmowy, tylko dla oferty z rozmowy,
+     * najwyżej raz i w ciągu {@code price-offer-validity} od akceptacji. Cudza albo nieistniejąca propozycja to 404.
+     */
+    @Transactional
+    public PriceOffer redeem(UUID priceOfferId, UUID buyerId, UUID offerId) {
+        PriceOffer offer = priceOffers.findById(priceOfferId)
+                .filter(o -> chats.findById(o.getChatId()).filter(c -> c.isBuyer(buyerId) && c.getOfferId().equals(offerId)).isPresent())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Nie znaleźliśmy takiej propozycji ceny."));
+        switch (offer.getStatus()) {
+            case PriceOffer.PENDING -> throw new ResponseStatusException(HttpStatus.CONFLICT, "Sprzedawca nie odpowiedział jeszcze na propozycję ceny.");
+            case PriceOffer.DECLINED -> throw new ResponseStatusException(HttpStatus.CONFLICT, "Sprzedawca odrzucił tę propozycję ceny.");
+            default -> { }
+        }
+        if (offer.getUsedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Ta cena została już wykorzystana w zamówieniu.");
+        }
+        Instant now = clock.instant();
+        if (priceOffers.redeem(priceOfferId, now, now.minus(priceOfferValidity)) == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Ta cena już nie obowiązuje. Zaproponuj nową.");
+        }
+        return priceOffers.findById(priceOfferId).orElseThrow();
+    }
+
+    /** Zamówienie nie powstało, więc cena znów jest do wykorzystania (jeśli nadal ważna). */
+    @Transactional
+    public void release(UUID priceOfferId) {
+        priceOffers.release(priceOfferId);
     }
 
     /** Blokuje rozmówcę we wszystkich rozmowach tej pary; ponowne zablokowanie niczego nie zmienia. */

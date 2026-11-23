@@ -33,6 +33,9 @@ public class PriceOffer {
     @Column(name = "decided_at")
     private Instant decidedAt;
 
+    @Column(name = "used_at")
+    private Instant usedAt;
+
     protected PriceOffer() {
     }
 
@@ -63,5 +66,18 @@ public class PriceOffer {
 
     public String getStatus() {
         return status;
+    }
+
+    public Instant getDecidedAt() {
+        return decidedAt;
+    }
+
+    public Instant getUsedAt() {
+        return usedAt;
+    }
+
+    /** Do kiedy zaakceptowana cena obowiązuje; przed akceptacją brak terminu. */
+    public Instant expiresAt(java.time.Duration validity) {
+        return ACCEPTED.equals(status) && decidedAt != null ? decidedAt.plus(validity) : null;
     }
 }

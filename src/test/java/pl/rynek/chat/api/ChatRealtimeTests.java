@@ -291,7 +291,7 @@ class ChatRealtimeTests {
 
     private UUID offer(UUID owner) {
         UUID id = UUID.randomUUID();
-        given(catalog.offer(id)).willReturn(Optional.of(new OfferInfo(id, true, "Słuchawki", UUID.randomUUID(), owner)));
+        given(catalog.offer(id)).willReturn(Optional.of(new OfferInfo(id, true, "Słuchawki", UUID.randomUUID(), owner, new CatalogClient.Money(50_000, "PLN"))));
         given(catalog.card(id)).willReturn(Optional.of(Map.of("id", id.toString(), "title", "Słuchawki",
                 "channel", Map.of("id", UUID.randomUUID().toString(), "name", "Elektro-Market", "verified", true))));
         return id;

@@ -57,6 +57,9 @@ class ChatFlowTests {
     @Autowired
     MockMvc mvc;
 
+    @Autowired
+    org.springframework.jdbc.core.JdbcTemplate jdbc;
+
     @MockitoBean
     JwtDecoder jwtDecoder;
 
@@ -290,6 +293,8 @@ class ChatFlowTests {
         priceOffer(buyer, id, 0, "PLN").andExpect(status().isBadRequest());
         priceOffer(buyer, id, 100_000_001L, "PLN").andExpect(status().isBadRequest());
         priceOffer(buyer, id, 35000, "EUR").andExpect(status().isBadRequest());
+        priceOffer(buyer, id, 50_001, "PLN").andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Proponowana cena nie może być wyższa od ceny oferty."));
         mvc.perform(post("/api/v1/chats/" + id + "/price-offers").header(HttpHeaders.AUTHORIZATION, bearer(buyer))
                 .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isBadRequest());
 
@@ -323,6 +328,40 @@ class ChatFlowTests {
         verify(notifications).send(eq(buyer), eq("messages"), eq("Propozycja ceny odrzucona"), startsWith("Sprzedawca odrzucił 330,00"),
                 eq("/wiadomosci/" + id), eq("price-offer-" + second + "-declined"));
         messages(buyer, id, "").andExpect(jsonPath("$.items[*].priceOffer.status", contains("ACCEPTED", "DECLINED")));
+    }
+
+    @Test
+    void acceptedPriceIsRedeemedOnceByTheBuyerForTheOfferAndExpires() throws Exception {
+        UUID seller = UUID.randomUUID();
+        UUID buyer = UUID.randomUUID();
+        UUID offerId = offer(seller, true);
+        String id = chat(buyer, offerId);
+        String po = JsonPath.read(priceOffer(buyer, id, 35000, "PLN").andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
+
+        redeem(po, buyer, offerId).andExpect(status().isConflict()).andExpect(jsonPath("$.detail").value("Sprzedawca nie odpowiedział jeszcze na propozycję ceny."));
+        decide(seller, id, po, "accept").andExpect(status().isOk())
+                .andExpect(jsonPath("$.expiresAt").isNotEmpty()).andExpect(jsonPath("$.used").value(false));
+        redeem(po, UUID.randomUUID(), offerId).andExpect(status().isNotFound());
+        redeem(po, buyer, UUID.randomUUID()).andExpect(status().isNotFound());
+        redeem(UUID.randomUUID().toString(), buyer, offerId).andExpect(status().isNotFound());
+
+        redeem(po, buyer, offerId).andExpect(status().isOk()).andExpect(jsonPath("$.amount").value(35000));
+        redeem(po, buyer, offerId).andExpect(status().isConflict()).andExpect(jsonPath("$.detail").value("Ta cena została już wykorzystana w zamówieniu."));
+        messages(buyer, id, "").andExpect(jsonPath("$.items[0].priceOffer.used").value(true));
+
+        mvc.perform(post("/internal/price-offers/" + po + "/release")).andExpect(status().isNoContent());
+        // Po 24 godzinach od akceptacji cena nie obowiązuje.
+        jdbc.update("update price_offers set decided_at = now() - interval '25 hours' where id = ?::uuid", po);
+        redeem(po, buyer, offerId).andExpect(status().isConflict()).andExpect(jsonPath("$.detail").value("Ta cena już nie obowiązuje. Zaproponuj nową."));
+
+        String declined = JsonPath.read(priceOffer(buyer, id, 33000, "PLN").andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(), "$.id");
+        decide(seller, id, declined, "decline").andExpect(status().isOk());
+        redeem(declined, buyer, offerId).andExpect(status().isConflict()).andExpect(jsonPath("$.detail").value("Sprzedawca odrzucił tę propozycję ceny."));
+    }
+
+    private ResultActions redeem(String priceOfferId, UUID buyer, UUID offerId) throws Exception {
+        return mvc.perform(post("/internal/price-offers/" + priceOfferId + "/redeem").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"buyerId\":\"" + buyer + "\",\"offerId\":\"" + offerId + "\"}"));
     }
 
     @Test
@@ -366,7 +405,7 @@ class ChatFlowTests {
 
     private UUID offer(UUID owner, boolean available) {
         UUID id = UUID.randomUUID();
-        given(catalog.offer(id)).willReturn(Optional.of(new OfferInfo(id, available, "Słuchawki", UUID.randomUUID(), owner)));
+        given(catalog.offer(id)).willReturn(Optional.of(new OfferInfo(id, available, "Słuchawki", UUID.randomUUID(), owner, new CatalogClient.Money(50_000, "PLN"))));
         given(catalog.card(id)).willReturn(Optional.of(Map.of("id", id.toString(), "title", "Słuchawki",
                 "channel", Map.of("id", UUID.randomUUID().toString(), "handle", "elektro", "name", "Elektro-Market", "verified", true))));
         return id;
